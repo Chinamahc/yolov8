@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+from PIL import Image
+
+from ultralytics.data import load_inference_source
 from ultralytics.engine.model import Model
 from ultralytics.models import yolo
 from ultralytics.nn.tasks import ClassificationModel, DetectionModel, OBBModel, PoseModel, SegmentationModel, WorldModel
@@ -87,18 +90,33 @@ class YOLOWorld(Model):
             }
         }
 
-    def set_classes(self, classes):
+    def set_classes(self, labels, images=[]):
         """
         Set classes.
 
         Args:
-            classes (List(str)): A list of categories i.e ["person"].
+            labels (List(str)): A list of categories i.e ["person"].
+            images (List()): A list of images.
         """
-        self.model.set_classes(classes)
+
+        classes = labels.copy()
+        pilImages = []
+
+        for i, img in enumerate(images):
+            dataSet = load_inference_source(source=img, batch=1)
+            for batch in dataSet:
+                paths, im0s, s = batch
+                path = Path(paths[0])
+                image = Image.fromarray(im0s[0]).convert("RGB")
+                pilImages.append(image)
+                classes.append(path.name)
+
+        self.model.set_classes(labels=labels, images=pilImages)
         # Remove background if it's given
         background = " "
-        if background in classes:
-            classes.remove(background)
+        if background in labels:
+            labels.remove(background)
+
         self.model.names = classes
 
         # Reset method class names
