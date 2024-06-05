@@ -89,6 +89,7 @@ class AutoBackend(nn.Module):
         batch=1,
         fuse=True,
         verbose=True,
+        end2end=False,
     ):
         """
         Initialize the AutoBackend for inference.
@@ -102,6 +103,7 @@ class AutoBackend(nn.Module):
             batch (int): Batch-size to assume for inference.
             fuse (bool): Fuse Conv2D + BatchNorm layers for optimization. Defaults to True.
             verbose (bool): Enable verbose logging. Defaults to True.
+            end2end (bool): Whether to use end2end inference pipeline, only available for pt or nn_module.
         """
         super().__init__()
         w = str(weights[0] if isinstance(weights, list) else weights)
@@ -146,6 +148,7 @@ class AutoBackend(nn.Module):
                 kpt_shape = model.kpt_shape  # pose-only
             stride = max(int(model.stride.max()), 32)  # model stride
             names = model.module.names if hasattr(model, "module") else model.names  # get class names
+            setattr(model.model[-1], "end2end", end2end)
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
             pt = True
@@ -161,6 +164,7 @@ class AutoBackend(nn.Module):
                 kpt_shape = model.kpt_shape  # pose-only
             stride = max(int(model.stride.max()), 32)  # model stride
             names = model.module.names if hasattr(model, "module") else model.names  # get class names
+            setattr(model.model[-1], "end2end", end2end)
             model.half() if fp16 else model.float()
             self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
 
@@ -414,6 +418,7 @@ class AutoBackend(nn.Module):
             imgsz = metadata["imgsz"]
             names = metadata["names"]
             kpt_shape = metadata.get("kpt_shape")
+            end2end = metadata.get("end2end", False) in {True, "True", "true", 1, "1"}
         elif not (pt or triton or nn_module):
             LOGGER.warning(f"WARNING ⚠️ Metadata not found for 'model={weights}'")
 
@@ -584,8 +589,12 @@ class AutoBackend(nn.Module):
                     if x.ndim == 3:  # if task is not classification, excluding masks (ndim=4) as well
                         # Denormalize xywh by image size. See https://github.com/ultralytics/ultralytics/pull/1695
                         # xywh are normalized in TFLite/EdgeTPU to mitigate quantization error of integer models
-                        x[:, [0, 2]] *= w
-                        x[:, [1, 3]] *= h
+                        if not self.end2end:  # (1, 84, 8400)
+                            x[:, [0, 2]] *= w
+                            x[:, [1, 3]] *= h
+                        elif self.end2end:  # (1, 300, 6)
+                            x[..., :, [0, 2]] *= w
+                            x[..., :, [1, 3]] *= h
                     y.append(x)
             # TF segment fixes: export is reversed vs ONNX export and protos are transposed
             if len(y) == 2:  # segment with (det, proto) output order reversed
